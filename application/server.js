@@ -1,0 +1,122 @@
+// ExpressJS Setup
+const express = require("express");
+const app = express();
+var bodyParser = require("body-parser");
+
+// Hyperledger Bridge
+const { Wallets, Gateway } = require("fabric-network");
+const fs = require("fs");
+const path = require("path");
+const ccpPath = path.resolve(__dirname, "ccp", "connection-org1.json");
+let ccp = JSON.parse(fs.readFileSync(ccpPath, "utf8"));
+
+// Constants
+const PORT = 8080;
+const HOST = "0.0.0.0";
+
+// use static file
+app.use(express.static(path.join(__dirname, "views")));
+
+// configure app to use body-parser
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false }));
+
+// main page routing
+app.get("/", (req, res) => {
+    res.sendFile(__dirname + "/index.html");
+});
+
+async function cc_call(fn_name, args) {
+    const walletPath = path.join(process.cwd(), "wallet");
+    console.log(`Wallet path: ${walletPath}`);
+    const wallet = await Wallets.newFileSystemWallet(walletPath);
+
+    console.log(`Wallet path: ${walletPath}`);
+
+    const userExists = await wallet.get("appUser");
+    console.log(`User exist: ${userExists}`);
+
+    if (!userExists) {
+        console.log(
+            'An identity for the user "appUser" does not exist in the wallet'
+        );
+        console.log("Run the registerUser.js application before retrying");
+        return;
+    }
+
+    const gateway = new Gateway();
+    await gateway.connect(ccp, {
+        wallet,
+        identity: "appUser",
+        discovery: { enabled: true, asLocalhost: true },
+    });
+
+    const network = await gateway.getNetwork("mychannel");
+    const contract = network.getContract("proptech");
+
+    var result;
+
+    try {
+        if (fn_name == "Register") {
+            pid = args[0];
+            price = args[1];
+            console.log("=====cc_cal_log ======= Registering pid", pid, price)
+            result = await contract.submitTransaction("Register", pid, price);
+
+        } else if (fn_name == "Open") {
+            result = await contract.submitTransaction("Open", args[0], args[1]);
+        
+        } else if (fn_name == "Query") {
+            result = await contract.evaluateTransaction("Query", args[0]);
+        }
+        
+        else result = "not supported function";
+        
+        return result;
+    } catch (error){
+        console.log('error in cc_call')
+    }
+}
+
+
+app.post("/property", async (req, res) => {
+    const pid = req.body.pid;
+    const price = req.body.price;
+
+    console.log("Register : " + pid, price);
+    console.log(req.body);
+
+    result = await cc_call("Register", [pid, price]);
+    console.log("result: " + result.toString());
+
+    const myobj = { result: "success" };
+
+    res.status(200).json(myobj);
+});
+
+app.post("/sale", async (req, res) => {
+    const pid = req.body.pid;
+    const params = req.body.params;
+    console.log("Open : " + pid, params);
+
+    result = await cc_call("Open", [pid, params]);
+
+    const myobj = { result: "success" };
+    res.status(200).json(myobj);
+});
+
+// find mate
+app.get("/history", async (req, res) => {
+    const pid = req.query.pid;
+    console.log("query pid: " + pid);
+
+    result = await cc_call("Query", [pid]);
+    console.log("result: " + result.toString());
+    const myobj = JSON.parse(result, "utf8");
+
+    res.status(200).json(myobj);
+});
+
+// server start
+app.listen(PORT, HOST);
+console.log(`Running on http://${HOST}:${PORT}`);
